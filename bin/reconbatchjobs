@@ -1,0 +1,102 @@
+#!/bin/bash -f
+#
+# NAME
+#
+#  reconbatchjobs
+#
+# SYNOPSIS
+#
+#  reconbatchjobs logfile cmdfile1 [cmdfile2 ...]
+#
+# DESCRIPTION
+#
+#  reconbatchjobs is a worker-bee for the recon-all script, to
+#  support running multiple instances of a binary (ie running
+#  in parallel).  The main hurdles to running recon-all binaries
+#  in parallel is making sure to get the return code, and to
+#  buffer the log files (otherwise, if the output of parallel jobs
+#  are simultaneously sent to the log file, then the log file
+#  becomes an interleaved mess).
+#
+#  reconbatchjobs takes at least two arguments.  The first is the
+#  filename to which command output should be appended when the
+#  command (job) is finished.
+#  The next argument(s) are files containing the command string
+#  to execute.
+#  For example usage, look in the recon-all script in the 'multi-strip'
+#  section of the skull-strip stage.
+#
+#  Note: the commands are assumed to be independent of each other,
+#  and a dependency chain is not supported (and so commands that need
+#  to run in sequence should be handled by the caller, eg. recon-all)
+#
+# Original Author: Nick Schmansky
+# CVS Revision Info:
+#    $Author: greve $
+#    $Date: 2016/08/16 21:48:14 $
+#    $Revision: 1.2.2.1 $
+#
+# Copyright © 2011-2014 The General Hospital Corporation (Boston, MA) "MGH"
+#
+# Terms and conditions for use, reproduction, distribution and contribution
+# are found in the 'FreeSurfer Software License Agreement' contained
+# in the file 'LICENSE' found in the FreeSurfer distribution, and here:
+#
+# https://surfer.nmr.mgh.harvard.edu/fswiki/FreeSurferSoftwareLicense
+#
+# Reporting: freesurfer@nmr.mgh.harvard.edu
+#
+#
+
+if [ $# -lt 2 ] ; then
+  echo "Usage: reconbatchjobs logfile cmdfile1 [cmdfile2 ...]"
+  echo "See recon-all script for examples."
+  exit 1
+fi
+
+MAIN_LOG_FILE=$1
+
+# launch jobs found in command files (shift past first logfile arg).
+# job output goes to a logfile named after the command file, which
+# later gets appended to MAIN_LOG_FILE
+PIDS=()
+LOGS=()
+shift
+for cmd in $*; do
+  JOB=`cat $cmd`
+  LOG=$cmd.log
+  echo "" >& $LOG
+  echo " $JOB" >> $LOG
+  echo "" >> $LOG
+  exec $JOB >> $LOG 2>&1 &
+  PIDS=(${PIDS[@]} $!)
+  LOGS=(${LOGS[@]} $LOG)
+  rm -f $cmd
+done
+
+# wait till all processes have finished
+PIDS_STATUS=()
+for pid in "${PIDS[@]}"; do
+  echo "Waiting for PID $pid of (${PIDS[@]}) to complete..."
+  wait $pid
+  PIDS_STATUS=(${PIDS_STATUS[@]} $?)
+done
+
+# now append their logs to the main log file
+for log in "${LOGS[@]}"
+do
+  cat $log >> $MAIN_LOG_FILE
+  rm -f $log
+done
+
+echo "PIDs (${PIDS[@]}) completed and logs appended."
+
+# and check for failures
+for pid_status in "${PIDS_STATUS[@]}"
+do
+  if [ $pid_status != 0 ] ; then
+      exit 1
+  fi
+done
+
+exit 0
